@@ -31,8 +31,8 @@
   "scripts": {
     "build": "tsdown",
     "prepare": "tsdown",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --pool=threads",
+    "test:watch": "vitest --pool=threads",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
