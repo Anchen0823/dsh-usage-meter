@@ -1,21 +1,30 @@
 /**
  * DeepSeek API pricing used to bill session usage.
  *
- * All rates are USD per 1M tokens, sourced from the DeepSeek official API
- * docs: https://api-docs.deepseek.com/quick_start/pricing/ (fetched
+ * Rates are per 1M tokens in the selected currency (USD or CNY), sourced
+ * from the DeepSeek official API docs — USD:
+ * https://api-docs.deepseek.com/quick_start/pricing/ · CNY:
+ * https://api-docs.deepseek.com/zh-cn/quick_start/pricing/ (fetched
  * {@link PRICING_FETCHED_AT}). DeepSeek-V4 bills in two input buckets —
  * cache hit (cached input) and cache miss (uncached input) — plus output.
- * Peak hours are 01:00–04:00 and 06:00–10:00 UTC, Monday–Friday; all other
- * hours are off-peak and billed at half the peak rate.
+ * Peak hours are 01:00–04:00 and 06:00–10:00 UTC, Monday–Friday (equivalently
+ * 09:00–12:00 and 14:00–18:00 Beijing time); all other hours are off-peak and
+ * billed at half the peak rate.
  */
 
-/** Official pricing documentation page. */
+/** Official pricing documentation page (English, USD). */
 export const PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/quick_start/pricing/'
 
-/** Date the built-in table was checked against the official docs. */
+/** Official pricing documentation page (中文, 人民币). */
+export const PRICING_SOURCE_URL_CNY = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'
+
+/** Date the built-in tables were checked against the official docs. */
 export const PRICING_FETCHED_AT = '2026-08-21'
 
-/** One model's official off-peak rates, USD per 1M tokens. */
+/** Billing currency. */
+export type Currency = 'usd' | 'cny'
+
+/** One model's official off-peak rates, per 1M tokens. */
 export interface ModelPrice {
   /** Uncached input (cache miss). */
   readonly inputCacheMiss: number
@@ -26,7 +35,7 @@ export interface ModelPrice {
 }
 
 /**
- * Official DeepSeek pricing table, keyed by API model id.
+ * Official DeepSeek pricing table in USD, keyed by API model id.
  *
  * `deepseek-v4-flash` / `deepseek-v4-pro` / `deepseek-v4-flash-vision-exp`
  * are the current lineup. `deepseek-chat` / `deepseek-reasoner` are the
@@ -43,6 +52,25 @@ export const DEEPSEEK_PRICING: Readonly<Record<string, ModelPrice>> = {
   'deepseek-reasoner': { inputCacheMiss: 0.55, inputCacheHit: 0.14, output: 2.19 },
 }
 
+/**
+ * Official DeepSeek pricing table in CNY (人民币), keyed by API model id.
+ * Same structure and snapshot date as the USD table.
+ */
+export const DEEPSEEK_PRICING_CNY: Readonly<Record<string, ModelPrice>> = {
+  // DeepSeek-V4 (current official lineup)
+  'deepseek-v4-flash': { inputCacheMiss: 1.5, inputCacheHit: 0.05, output: 4.5 },
+  'deepseek-v4-flash-vision-exp': { inputCacheMiss: 1.5, inputCacheHit: 0.05, output: 4.5 },
+  'deepseek-v4-pro': { inputCacheMiss: 4.5, inputCacheHit: 0.15, output: 13.5 },
+  // Archived DeepSeek-V3 lineup
+  'deepseek-chat': { inputCacheMiss: 2, inputCacheHit: 0.5, output: 8 },
+  'deepseek-reasoner': { inputCacheMiss: 4, inputCacheHit: 1, output: 16 },
+}
+
+const PRICING_TABLES: Record<Currency, Readonly<Record<string, ModelPrice>>> = {
+  usd: DEEPSEEK_PRICING,
+  cny: DEEPSEEK_PRICING_CNY,
+}
+
 /** Peak rates are twice the off-peak rates. */
 export const PEAK_MULTIPLIER = 2
 
@@ -51,7 +79,8 @@ const PEAK_WEEKDAYS = new Set([1, 2, 3, 4, 5])
 
 /**
  * Whether `timeMs` falls in a DeepSeek peak window: 01:00–04:00 or
- * 06:00–10:00 UTC, Monday through Friday.
+ * 06:00–10:00 UTC, Monday through Friday (09:00–12:00 and 14:00–18:00
+ * Beijing time).
  */
 export function isPeakHour(timeMs: number): boolean {
   const date = new Date(timeMs)
@@ -61,26 +90,29 @@ export function isPeakHour(timeMs: number): boolean {
 }
 
 /** Resolve an official price entry for a model id (exact, then case/prefix tolerant). */
-export function resolveModelPrice(model: string): ModelPrice | undefined {
-  const exact = DEEPSEEK_PRICING[model]
+export function resolveModelPrice(model: string, currency: Currency = 'usd'): ModelPrice | undefined {
+  const table = PRICING_TABLES[currency]
+  const exact = table[model]
   if (exact !== undefined) return exact
   const normalized = model.toLowerCase()
-  const direct = DEEPSEEK_PRICING[normalized]
+  const direct = table[normalized]
   if (direct !== undefined) return direct
-  for (const [key, price] of Object.entries(DEEPSEEK_PRICING)) {
+  for (const [key, price] of Object.entries(table)) {
     if (normalized.startsWith(key.toLowerCase())) return price
   }
   return undefined
 }
 
-/** Per-model user overrides, USD per 1M tokens; partial entries merge over the official table. */
+/** Per-model user overrides, in the selected currency per 1M tokens; partial entries merge over the official table. */
 export type ModelPriceOverrides = Readonly<Record<string, Partial<ModelPrice>>>
 
 /** Options controlling how prices are resolved. */
 export interface PriceResolverOptions {
+  /** Billing currency; selects the official price table. */
+  readonly currency: Currency
   /** Apply DeepSeek peak/off-peak rates by request time. Default true. */
   readonly peakPricing: boolean
-  /** Per-model price overrides merged over the official table. */
+  /** Per-model price overrides (in `currency`) merged over the official table. */
   readonly overrides: ModelPriceOverrides
 }
 
@@ -101,7 +133,7 @@ export type PriceResolver = (model: string, timeMs: number) => ModelPrice | unde
  */
 export function createPriceResolver(options: PriceResolverOptions): PriceResolver {
   return (model, timeMs): ModelPrice | undefined => {
-    const official = resolveModelPrice(model)
+    const official = resolveModelPrice(model, options.currency)
     const override = options.overrides[model]
     if (official === undefined && override === undefined) return undefined
     const merged: ModelPrice = {

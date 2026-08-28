@@ -59,7 +59,7 @@ describe('deriveSessionUsage', () => {
     expect(summary.routes).toEqual([])
     expect(summary.completedTurns).toBe(0)
     expect(summary.openTurn).toBeUndefined()
-    expect(summary.totalCostUsd).toBeUndefined()
+    expect(summary.totalCost).toBeUndefined()
   })
 
   it('accumulates usage chunks into a route', () => {
@@ -145,7 +145,7 @@ describe('deriveSessionUsage', () => {
   })
 
   it('computes cost with a known model and peak doubling', () => {
-    const resolver = createPriceResolver({ peakPricing: true, overrides: {} })
+    const resolver = createPriceResolver({ currency: 'usd', peakPricing: true, overrides: {} })
     const log = new Log()
       .turnStart(1)
       .assistantMessage(1, 1, 'deepseek', 'deepseek-v4-flash',
@@ -155,7 +155,11 @@ describe('deriveSessionUsage', () => {
       .turnEnd(1)
     const summary = deriveSessionUsage(log.events, resolver)
     // Off-peak: 0.22 (miss) + 0.66 (output) = 0.88; peak doubles to 1.76. Total 2.64.
-    expect(summary.totalCostUsd).toBeCloseTo(2.64, 6)
+    expect(summary.totalCost).toBeCloseTo(2.64, 6)
+    expect(summary.routes[0]!.costs).toBeDefined()
+    expect(summary.routes[0]!.costs!.inputMiss).toBeCloseTo(0.66, 6)
+    expect(summary.routes[0]!.costs!.inputHit).toBe(0)
+    expect(summary.routes[0]!.costs!.output).toBeCloseTo(1.98, 6)
     expect(summary.routes[0]!.peakRequests).toBe(1)
     expect(summary.routes[0]!.offPeakRequests).toBe(1)
   })
@@ -164,10 +168,10 @@ describe('deriveSessionUsage', () => {
     const summary = deriveSessionUsage(new Log()
       .requestContext('openai', 'gpt-5')
       .turnStart(1).usageChunk(1, 1, usage()).turnEnd(1)
-      .events, createPriceResolver({ peakPricing: true, overrides: {} }))
-    expect(summary.totalCostUsd).toBeUndefined()
+      .events, createPriceResolver({ currency: 'usd', peakPricing: true, overrides: {} }))
+    expect(summary.totalCost).toBeUndefined()
     expect(summary.unpricedRoutes).toBe(1)
-    expect(summary.routes[0]!.costUsd).toBeUndefined()
+    expect(summary.routes[0]!.costs).toBeUndefined()
   })
 
   it('reports the event time range', () => {

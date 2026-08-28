@@ -1,26 +1,27 @@
 # dsh-usage-meter
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) plugin that reports **per-session token usage and DeepSeek API cost** for the current session, billed with the [official DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing/).
+A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) plugin that reports **per-session token usage and DeepSeek API cost** for the current session, billed with the [official DeepSeek pricing](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/). Defaults to **人民币 (CNY)** billing, with USD available via configuration.
 
-Run `/usage` in any session (Web GUI or CLI) and the plugin folds that session's durable event log — the exact provider-reported `usage` records — into a per-model breakdown of input (cache miss / cache hit), output, reasoning, and total tokens, then prices them in USD using DeepSeek's official rates, applying **peak / off-peak** rates per request time.
+Run `/usage` in any session (Web GUI or CLI) and the plugin folds that session's durable event log — the exact provider-reported `usage` records — into a per-model breakdown of input (cache miss / cache hit), output, reasoning, and total tokens, then prices them using DeepSeek's official rates, applying **peak / off-peak** rates per request time.
 
 ```
-Token usage and API cost for session session-123
-  completed turns: 5 · current turn 6 in progress
-  billed requests: 12 · first event: 2026-08-21 09:02:11 UTC · last event: 2026-08-21 10:14:37 UTC
-  pricing: DeepSeek official pricing — https://api-docs.deepseek.com/quick_start/pricing/ (fetched 2026-08-21) · peak/off-peak applied per request time
+📊 26,181,549 tokens · 138 次请求 · ¥2.2421
+  会话 session-d83cd3bc-225e-4d5d-bff8-d5702717c704
+  完成轮次 2 · 当前第 3 轮进行中
+  时间范围 2026-08-28 16:00:01 UTC ~ 2026-08-28 16:46:57 UTC
+  计费 DeepSeek 官方人民币价格 — https://api-docs.deepseek.com/zh-cn/quick_start/pricing/ (2026-08-21 抓取) · 按请求时间区分高峰/空闲
 
-Per model:
-  deepseek / deepseek-v4-flash
-    input (cache miss): 123,456
-    input (cache hit):  45,678
-    output:              9,012
-    reasoning:           1,234
-    total tokens:      178,146
-    requests: 10 (7 off-peak, 3 peak)
-    cost: $0.0842
+🧮 deepseek-official / deepseek-v4-flash
+  费率 ¥1.5/M 未命中 · ¥0.05/M 命中 · ¥4.5/M 输出
+  输入(未命中)         151,398  ¥0.2271
+  输入(命中)        25,869,824  ¥1.2935
+  输出                 160,327  ¥0.7215
+  推理(含于输出)        97,806
+  合计              26,181,549
+  请求 138 次（空闲 138 · 高峰 0） · 缓存命中率 99.4%
+  费用 ¥2.2421
 
-Total: 178,146 tokens · cost $0.0842
+💰 总计 ¥2.2421
 ```
 
 ## Install
@@ -43,12 +44,20 @@ Restart (or hot-reload) the session and type `/usage`.
 
 - **Usage source.** The fold reads `assistant/chunk { type: 'usage' }` and `assistant/message.usage` records from the session log — the same exact, provider-reported buckets the harness itself tracks. Nothing is estimated heuristically, and a usage sample replaced by the final message of the same attempt is never double counted (retried attempts add once each).
 - **Buckets.** DeepSeek reports uncached input, cached input (cache hit), and output; reasoning is the output subset. Billed input = uncached input at the cache-miss rate + cached input at the cache-hit rate (cache-write input, when another adapter reports it, is billed at the miss rate — DeepSeek reports no separate cache-write charge).
-- **Rates.** USD per 1M tokens, from the official docs (fetched `2026-08-21`): `deepseek-v4-flash` — miss $0.22 / hit $0.007 / output $0.66; `deepseek-v4-pro` — miss $0.66 / hit $0.022 / output $1.98; `deepseek-v4-flash-vision-exp` — same as flash. Archived V3 ids (`deepseek-chat`, `deepseek-reasoner`) are kept for older deployments.
-- **Peak / off-peak.** DeepSeek-V4 bills peak hours (01:00–04:00 and 06:00–10:00 UTC, Mon–Fri) at **2× off-peak**. Each request is priced at its own event time, so the mix is exact. Turn this off with `peakPricing: false` to price everything off-peak.
-- **Unknown models.** Routes without a known price (or without provider/model attribution) still report tokens; their cost shows `—` and the total flags the number of unpriced routes.
-- **Overrides.** Prices change — override any model's buckets under `priceOverrides` (see below) without touching the code.
+- **Rates.** Official per-1M-token prices, fetched `2026-08-21` (off-peak; peak is 2×):
 
-> Prices are informative estimates computed from provider-reported usage with the official table; DeepSeek's own balance statement remains authoritative.
+  | Model | 缓存未命中 (miss) | 缓存命中 (hit) | 输出 (output) |
+  |---|---|---|---|
+  | deepseek-v4-flash | ¥1.5 · $0.22 | ¥0.05 · $0.007 | ¥4.5 · $0.66 |
+  | deepseek-v4-flash-vision-exp | ¥1.5 · $0.22 | ¥0.05 · $0.007 | ¥4.5 · $0.66 |
+  | deepseek-v4-pro | ¥4.5 · $0.66 | ¥0.15 · $0.022 | ¥13.5 · $1.98 |
+
+  Archived V3 ids (`deepseek-chat`, `deepseek-reasoner`) are kept for older deployments in both currencies. CNY is the default (`currency: cny`); set `currency: usd` for the USD table.
+- **Peak / off-peak.** DeepSeek-V4 bills peak hours at **2× off-peak**: 01:00–04:00 and 06:00–10:00 UTC, Mon–Fri (equivalently 09:00–12:00 and 14:00–18:00 北京时间). Each request is priced at its own event time, so the mix is exact. Turn this off with `peakPricing: false` to price everything off-peak.
+- **Unknown models.** Routes without a known price (or without provider/model attribution) still report tokens; their cost shows `—` and the total flags the number of unpriced routes.
+- **Overrides.** Prices change — override any model's buckets under `priceOverrides` (in the selected currency) without touching the code.
+
+> Prices are informative estimates computed from provider-reported usage with the official tables; DeepSeek's own balance statement remains authoritative.
 
 ## Configuration
 
@@ -58,6 +67,7 @@ Configure via the bundle row in your `cordis.patch.yml` (or `dsh.config`):
 - id: usage-meter
   name: dsh-usage-meter
   config:
+    currency: cny
     peakPricing: true
     priceOverrides:
       deepseek-v4-flash:
@@ -70,8 +80,9 @@ Configure via the bundle row in your `cordis.patch.yml` (or `dsh.config`):
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
+| `currency` | `cny` \| `usd` | `cny` | Billing currency; selects the official price table and the `¥`/`$` symbol. |
 | `peakPricing` | boolean | `true` | Apply peak (2×) rates to requests in peak hours; `false` prices everything off-peak. |
-| `priceOverrides` | record | `{}` | Per-model USD per-1M overrides, merged over the official table. A model with no official price must override every bucket it should be billed for. |
+| `priceOverrides` | record | `{}` | Per-model per-1M overrides (in the selected currency), merged over the official table. A model with no official price must override every bucket it should be billed for. |
 
 ## Development
 
@@ -82,14 +93,16 @@ npm run typecheck  # tsc --noEmit
 npm run build      # tsdown -> lib/index.js
 ```
 
-The build is a plain ESM transpile (`external: @deepseek-ai/*, schemastery`) with no type-checking or declaration emit, so it also runs as the `prepare` hook for git-based installs.
+The build is a plain ESM transpile (unbundled `@deepseek-ai/*`, `schemastery`) with no type-checking or declaration emit, so it also runs as the `prepare` hook for git-based installs.
+
+`scripts/report-session.mjs` is a diagnostic: it decodes a persisted `session.jsonl.zstd` log and runs the `/usage` fold over the real events without touching the running deployment.
 
 ## Known limitations
 
 - **Command-only surface.** Usage is shown on demand via `/usage`. Automatic per-turn display in the Web Client chat (a business conversation node) is future work; `session/event` listeners can already observe the same data the command folds.
 - **Provider-reported usage only.** If an adapter reports no usage (or a request failed before reporting), those tokens cannot be billed and are not estimated.
-- **Prices are a snapshot.** The table was fetched on `2026-08-21`; re-verify against the [official docs](https://api-docs.deepseek.com/quick_start/pricing/) and use `priceOverrides` when they drift.
-- **USD only.** DeepSeek's platform bills USD; no currency conversion is offered.
+- **Prices are a snapshot.** The tables were fetched on `2026-08-21`; re-verify against the [official docs](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) and use `priceOverrides` when they drift.
+- **CNY and USD are separate official tables.** The CNY table is DeepSeek's published 人民币 pricing, not a USD conversion; the two may drift independently.
 
 ## License
 

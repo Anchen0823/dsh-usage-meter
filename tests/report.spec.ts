@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { formatCost, formatUsageCompact, formatUsageReport } from '../src/report.ts'
+import { formatCost, formatUsageCompact, formatUsageReport, type ReportOptions } from '../src/report.ts'
 import type { UsageSummary } from '../src/usage.ts'
 
-const options = {
-  sourceNote: 'DeepSeek official pricing — https://api-docs.deepseek.com/quick_start/pricing/ (fetched 2026-08-21)',
+const options: ReportOptions = {
+  currency: 'cny',
+  sourceNote: 'DeepSeek 官方人民币价格 — https://api-docs.deepseek.com/zh-cn/quick_start/pricing/ (2026-08-21 抓取)',
   peakPricing: true,
+  basePriceOf: () => ({ inputCacheMiss: 1.5, inputCacheHit: 0.05, output: 4.5 }),
 }
 
 const summary: UsageSummary = {
@@ -29,12 +31,12 @@ const summary: UsageSummary = {
         reasoningTokens: 10,
         requests: 2,
       },
-      costUsd: 0.0042,
+      costs: { inputMiss: 0.0015, inputHit: 0.0001, output: 0.0022 },
       peakRequests: 1,
       offPeakRequests: 1,
     },
   ],
-  totalCostUsd: 0.0042,
+  totalCost: 0.0038,
   unpricedRoutes: 0,
   completedTurns: 1,
   openTurn: undefined,
@@ -45,48 +47,55 @@ const summary: UsageSummary = {
 }
 
 describe('formatCost', () => {
-  it('formats sub-cent amounts with four decimals', () => {
-    expect(formatCost(0.0042)).toBe('$0.0042')
-    expect(formatCost(12.5)).toBe('$12.5000')
+  it('formats CNY with the ¥ symbol', () => {
+    expect(formatCost(0.0042, 'cny')).toBe('¥0.0042')
+    expect(formatCost(12.5, 'cny')).toBe('¥12.5000')
+  })
+
+  it('formats USD with the $ symbol', () => {
+    expect(formatCost(0.0042, 'usd')).toBe('$0.0042')
+    expect(formatCost(12.5, 'usd')).toBe('$12.5000')
   })
 })
 
 describe('formatUsageReport', () => {
-  it('renders session identity and totals', () => {
+  it('renders the headline, meta, and totals', () => {
     const text = formatUsageReport(summary, options)
-    expect(text).toContain('Token usage and API cost for session session-42')
-    expect(text).toContain('completed turns: 1')
-    expect(text).toContain('billed requests: 2')
-    expect(text).toContain('first event: 2026-01-04 12:00:00 UTC')
-    expect(text).toContain('peak/off-peak applied per request time')
+    expect(text).toContain('📊 1,250 tokens · 2 次请求 · ¥0.0038')
+    expect(text).toContain('会话 session-42')
+    expect(text).toContain('完成轮次 1')
+    expect(text).toContain('时间范围 2026-01-04 12:00:00 UTC ~ 2026-01-05 02:30:00 UTC')
+    expect(text).toContain('按请求时间区分高峰/空闲')
+    expect(text).toContain('💰 总计 ¥0.0038')
   })
 
-  it('renders per-model detail with cost', () => {
+  it('renders per-model detail with rate, buckets, and per-bucket costs', () => {
     const text = formatUsageReport(summary, options)
-    expect(text).toContain('deepseek / deepseek-v4-flash')
-    expect(text).toContain('input (cache miss): 1,000')
-    expect(text).toContain('input (cache hit):  200')
-    expect(text).toContain('output:             50')
-    expect(text).toContain('reasoning:          10')
-    expect(text).toContain('total tokens:       1,250')
-    expect(text).toContain('requests: 2 (1 off-peak, 1 peak)')
-    expect(text).toContain('cost: $0.0042')
-    expect(text).toContain('Total: 1,250 tokens · cost $0.0042')
+    expect(text).toContain('🧮 deepseek / deepseek-v4-flash')
+    expect(text).toContain('费率 ¥1.5/M 未命中 · ¥0.05/M 命中 · ¥4.5/M 输出')
+    expect(text).toContain('输入(未命中)')
+    expect(text).toContain('1,000')
+    expect(text).toContain('¥0.0015')
+    expect(text).toContain('输入(命中)')
+    expect(text).toContain('¥0.0001')
+    expect(text).toContain('输出')
+    expect(text).toContain('¥0.0022')
+    expect(text).toContain('推理(含于输出)')
+    expect(text).toContain('合计')
+    expect(text).toContain('请求 2 次（空闲 1 · 高峰 1） · 缓存命中率 16.7%')
+    expect(text).toContain('费用 ¥0.0038')
   })
 
   it('marks unpriced routes', () => {
     const unpriced: UsageSummary = {
       ...summary,
-      totalCostUsd: undefined,
+      totalCost: undefined,
       unpricedRoutes: 1,
-      routes: [{
-        ...summary.routes[0]!,
-        costUsd: undefined,
-      }],
+      routes: [{ ...summary.routes[0]!, costs: undefined }],
     }
     const text = formatUsageReport(unpriced, options)
-    expect(text).toContain('cost: — (no pricing known for this model)')
-    expect(text).toContain('Total: 1,250 tokens · cost unknown (no pricing for any route)')
+    expect(text).toContain('费用 —（该模型暂无价格）')
+    expect(text).toContain('💰 总计 —（所有模型均无已知价格，仅统计 token）')
   })
 
   it('reports a session with no recorded usage', () => {
@@ -94,7 +103,7 @@ describe('formatUsageReport', () => {
       sessionId: 'session-0',
       totals: { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0, requests: 0 },
       routes: [],
-      totalCostUsd: undefined,
+      totalCost: undefined,
       unpricedRoutes: 0,
       completedTurns: 0,
       openTurn: undefined,
@@ -104,12 +113,16 @@ describe('formatUsageReport', () => {
       unknownRouteSamples: 0,
     }
     const text = formatUsageReport(empty, options)
-    expect(text).toContain('No provider token usage has been recorded for this session yet.')
+    expect(text).toContain('本会话暂无 token 用量记录。')
   })
 })
 
 describe('formatUsageCompact', () => {
-  it('renders a one-line summary', () => {
-    expect(formatUsageCompact(summary)).toBe('1.25K tokens, 1 turn(s), 2 request(s), $0.0042')
+  it('renders a one-line headline in CNY', () => {
+    expect(formatUsageCompact(summary, 'cny')).toBe('1,250 tokens · 2 次请求 · ¥0.0038')
+  })
+
+  it('renders a one-line headline in USD', () => {
+    expect(formatUsageCompact(summary, 'usd')).toBe('1,250 tokens · 2 次请求 · $0.0038')
   })
 })

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   createPriceResolver,
   DEEPSEEK_PRICING,
+  DEEPSEEK_PRICING_CNY,
   isPeakHour,
   PRICING_FETCHED_AT,
   resolveModelPrice,
@@ -15,7 +16,7 @@ const friday = Date.UTC(2026, 0, 9, 3, 0, 0)
 const saturday = Date.UTC(2026, 0, 10, 2, 0, 0)
 
 describe('DEEPSEEK_PRICING', () => {
-  it('covers the current official DeepSeek-V4 lineup', () => {
+  it('covers the current official DeepSeek-V4 lineup in USD', () => {
     expect(DEEPSEEK_PRICING['deepseek-v4-flash']).toEqual({
       inputCacheMiss: 0.22,
       inputCacheHit: 0.007,
@@ -29,12 +30,28 @@ describe('DEEPSEEK_PRICING', () => {
     expect(DEEPSEEK_PRICING['deepseek-v4-flash-vision-exp']).toEqual(DEEPSEEK_PRICING['deepseek-v4-flash'])
   })
 
-  it('keeps the archived V3 ids for older deployments', () => {
-    expect(DEEPSEEK_PRICING['deepseek-chat']).toBeDefined()
-    expect(DEEPSEEK_PRICING['deepseek-reasoner']).toBeDefined()
+  it('covers the current official DeepSeek-V4 lineup in CNY', () => {
+    expect(DEEPSEEK_PRICING_CNY['deepseek-v4-flash']).toEqual({
+      inputCacheMiss: 1.5,
+      inputCacheHit: 0.05,
+      output: 4.5,
+    })
+    expect(DEEPSEEK_PRICING_CNY['deepseek-v4-pro']).toEqual({
+      inputCacheMiss: 4.5,
+      inputCacheHit: 0.15,
+      output: 13.5,
+    })
+    expect(DEEPSEEK_PRICING_CNY['deepseek-v4-flash-vision-exp']).toEqual(DEEPSEEK_PRICING_CNY['deepseek-v4-flash'])
   })
 
-  it('records when the table was fetched', () => {
+  it('keeps the archived V3 ids for older deployments in both currencies', () => {
+    expect(DEEPSEEK_PRICING['deepseek-chat']).toBeDefined()
+    expect(DEEPSEEK_PRICING['deepseek-reasoner']).toBeDefined()
+    expect(DEEPSEEK_PRICING_CNY['deepseek-chat']).toBeDefined()
+    expect(DEEPSEEK_PRICING_CNY['deepseek-reasoner']).toBeDefined()
+  })
+
+  it('records when the tables were fetched', () => {
     expect(PRICING_FETCHED_AT).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   })
 })
@@ -65,27 +82,35 @@ describe('isPeakHour', () => {
 })
 
 describe('resolveModelPrice', () => {
-  it('resolves exact ids', () => {
-    expect(resolveModelPrice('deepseek-v4-flash')).toEqual(DEEPSEEK_PRICING['deepseek-v4-flash'])
+  it('resolves exact ids in the selected currency', () => {
+    expect(resolveModelPrice('deepseek-v4-flash', 'usd')).toEqual(DEEPSEEK_PRICING['deepseek-v4-flash'])
+    expect(resolveModelPrice('deepseek-v4-flash', 'cny')).toEqual(DEEPSEEK_PRICING_CNY['deepseek-v4-flash'])
   })
 
   it('is case-insensitive', () => {
-    expect(resolveModelPrice('DeepSeek-V4-Flash')).toEqual(DEEPSEEK_PRICING['deepseek-v4-flash'])
+    expect(resolveModelPrice('DeepSeek-V4-Flash', 'cny')).toEqual(DEEPSEEK_PRICING_CNY['deepseek-v4-flash'])
   })
 
   it('falls back to a known prefix', () => {
-    expect(resolveModelPrice('deepseek-v4-flash-0731')).toEqual(DEEPSEEK_PRICING['deepseek-v4-flash'])
+    expect(resolveModelPrice('deepseek-v4-flash-0731', 'usd')).toEqual(DEEPSEEK_PRICING['deepseek-v4-flash'])
   })
 
   it('returns undefined for unknown models', () => {
-    expect(resolveModelPrice('gpt-5')).toBeUndefined()
+    expect(resolveModelPrice('gpt-5', 'usd')).toBeUndefined()
+    expect(resolveModelPrice('gpt-5', 'cny')).toBeUndefined()
   })
 })
 
 describe('createPriceResolver', () => {
   const base: ModelPrice = { inputCacheMiss: 1, inputCacheHit: 0.5, output: 2 }
-  const resolverFor = (overrides: Record<string, Partial<ModelPrice>>, peakPricing = true) =>
-    createPriceResolver({ peakPricing, overrides })
+  const resolverFor = (
+    overrides: Record<string, Partial<ModelPrice>>,
+    options: Partial<{ peakPricing: boolean; currency: 'usd' | 'cny' }> = {},
+  ) => createPriceResolver({
+    currency: options.currency ?? 'usd',
+    peakPricing: options.peakPricing ?? true,
+    overrides,
+  })
 
   it('doubles prices in a peak window', () => {
     const resolver = resolverFor({})
@@ -99,8 +124,18 @@ describe('createPriceResolver', () => {
     })
   })
 
+  it('resolves CNY prices and doubles them in a peak window', () => {
+    const resolver = resolverFor({}, { currency: 'cny' })
+    expect(resolver('deepseek-v4-flash', sunday)).toEqual(DEEPSEEK_PRICING_CNY['deepseek-v4-flash'])
+    expect(resolver('deepseek-v4-flash', monday)).toEqual({
+      inputCacheMiss: 3,
+      inputCacheHit: 0.1,
+      output: 9,
+    })
+  })
+
   it('can disable peak pricing', () => {
-    const resolver = resolverFor({}, false)
+    const resolver = resolverFor({}, { peakPricing: false })
     expect(resolver('deepseek-v4-flash', monday)).toEqual(DEEPSEEK_PRICING['deepseek-v4-flash'])
   })
 

@@ -30,6 +30,15 @@ export interface UsageBucket {
   requests: number
 }
 
+/** Cost components of one route, in the selected currency. */
+export interface RouteCosts {
+  /** Uncached input (cache miss + cache write). */
+  inputMiss: number
+  /** Cached input (cache hit). */
+  inputHit: number
+  output: number
+}
+
 /** One provider/model route's aggregated usage and cost. */
 export interface RouteUsage {
   /** Empty when the route could not be attributed. */
@@ -38,10 +47,10 @@ export interface RouteUsage {
   model: string
   bucket: UsageBucket
   /**
-   * Summed USD cost of the route's priced samples; undefined when no price
-   * is known for the model.
+   * Summed cost components of the route's priced samples in the selected
+   * currency; undefined when no price is known for the model.
    */
-  costUsd: number | undefined
+  costs: RouteCosts | undefined
   /** Attempts that fell in a DeepSeek peak window. */
   peakRequests: number
   /** Attempts that fell outside a DeepSeek peak window. */
@@ -57,7 +66,7 @@ export interface UsageSummary {
   /** Per-route aggregates in first-seen order. */
   readonly routes: readonly RouteUsage[]
   /** Sum of every priced route's cost; undefined when no route was priced. */
-  readonly totalCostUsd: number | undefined
+  readonly totalCost: number | undefined
   /** Routes whose model has no known price (tokens still counted). */
   readonly unpricedRoutes: number
   /** `turn/end` events observed. */
@@ -89,7 +98,7 @@ interface Attempt {
   readonly turn: number
   readonly step: number
   readonly buckets: SampleBucket
-  readonly costUsd: number | undefined
+  readonly costs: RouteCosts | undefined
   readonly routeKey: string
   readonly peak: boolean
 }
@@ -114,19 +123,27 @@ export function bucketOf(usage: TokenUsage): SampleBucket | undefined {
 }
 
 /**
- * USD cost of one sample under the resolver. Cache-write input is billed at
- * the cache-miss rate (DeepSeek reports no separate cache-write charge).
+ * Cost components of one sample under the resolver. Cache-write input is
+ * billed at the cache-miss rate (DeepSeek reports no separate cache-write
+ * charge).
  * @returns undefined when the model has no known price.
  */
-export function sampleCost(buckets: SampleBucket, model: string, timeMs: number, resolver: PriceResolver): number | undefined {
+export function sampleCost(
+  buckets: SampleBucket,
+  model: string,
+  timeMs: number,
+  resolver: PriceResolver,
+): RouteCosts | undefined {
   const price = resolver(model, timeMs)
   if (price === undefined) return undefined
-  return (
-    ((buckets.inputTokens + buckets.cacheWriteTokens) / 1_000_000) * price.inputCacheMiss
-    + (buckets.cacheReadTokens / 1_000_000) * price.inputCacheHit
-    + (buckets.outputTokens / 1_000_000) * price.output
-  )
+  return {
+    inputMiss: ((buckets.inputTokens + buckets.cacheWriteTokens) / 1_000_000) * price.inputCacheMiss,
+    inputHit: (buckets.cacheReadTokens / 1_000_000) * price.inputCacheHit,
+    output: (buckets.outputTokens / 1_000_000) * price.output,
+  }
 }
+
+const costsTotal = (costs: RouteCosts): number => costs.inputMiss + costs.inputHit + costs.output
 
 const addBucket = (target: UsageBucket, source: SampleBucket, countRequest: boolean): void => {
   target.inputTokens += source.inputTokens
@@ -157,7 +174,7 @@ interface FoldState {
   openTurn: number | undefined
   skippedSamples: number
   unknownRouteSamples: number
-  totalCostUsd: number | undefined
+  totalCost: number | undefined
 }
 
 /**
@@ -187,7 +204,7 @@ export function deriveSessionUsage(events: readonly SessionEvent[], resolver: Pr
     openTurn: undefined,
     skippedSamples: 0,
     unknownRouteSamples: 0,
-    totalCostUsd: undefined,
+    totalCost: undefined,
   }
 
   for (const event of events) {
@@ -237,13 +254,13 @@ export function deriveSessionUsage(events: readonly SessionEvent[], resolver: Pr
   const routes = state.routeOrder
     .map(key => state.routes.get(key))
     .filter((route): route is RouteUsage => route !== undefined && route.bucket.requests > 0)
-  const unpricedRoutes = routes.filter(route => route.costUsd === undefined).length
+  const unpricedRoutes = routes.filter(route => route.costs === undefined).length
 
   return {
     sessionId: '',
     totals: state.totals,
     routes,
-    totalCostUsd: state.totalCostUsd,
+    totalCost: state.totalCost,
     unpricedRoutes,
     completedTurns: state.completedTurns,
     openTurn: state.openTurn,
@@ -262,7 +279,7 @@ function routeOf(state: FoldState, provider: string, model: string): RouteUsage 
     provider,
     model,
     bucket: { ...EMPTY_BUCKET },
-    costUsd: undefined,
+    costs: undefined,
     peakRequests: 0,
     offPeakRequests: 0,
   }
@@ -271,18 +288,36 @@ function routeOf(state: FoldState, provider: string, model: string): RouteUsage 
   return created
 }
 
-function addSampleToRoute(route: RouteUsage, buckets: SampleBucket, costUsd: number | undefined, peak: boolean): void {
+function addSampleToRoute(route: RouteUsage, buckets: SampleBucket, costs: RouteCosts | undefined, peak: boolean): void {
   addBucket(route.bucket, buckets, true)
-  if (costUsd !== undefined) route.costUsd = (route.costUsd ?? 0) + costUsd
+  if (costs !== undefined) route.costs = addCosts(route.costs, costs)
   if (peak) route.peakRequests += 1
   else route.offPeakRequests += 1
 }
 
-function subtractSampleFromRoute(route: RouteUsage, buckets: SampleBucket, costUsd: number | undefined, peak: boolean): void {
+function subtractSampleFromRoute(route: RouteUsage, buckets: SampleBucket, costs: RouteCosts | undefined, peak: boolean): void {
   subtractBucket(route.bucket, buckets, true)
-  if (costUsd !== undefined) route.costUsd = (route.costUsd ?? 0) - costUsd
+  if (costs !== undefined) route.costs = subtractCosts(route.costs, costs)
   if (peak) route.peakRequests -= 1
   else route.offPeakRequests -= 1
+}
+
+const addCosts = (target: RouteCosts | undefined, costs: RouteCosts): RouteCosts => {
+  if (target === undefined) return { ...costs }
+  return {
+    inputMiss: target.inputMiss + costs.inputMiss,
+    inputHit: target.inputHit + costs.inputHit,
+    output: target.output + costs.output,
+  }
+}
+
+const subtractCosts = (target: RouteCosts | undefined, costs: RouteCosts): RouteCosts => {
+  if (target === undefined) return { ...costs, inputMiss: -costs.inputMiss, inputHit: -costs.inputHit, output: -costs.output }
+  return {
+    inputMiss: target.inputMiss - costs.inputMiss,
+    inputHit: target.inputHit - costs.inputHit,
+    output: target.output - costs.output,
+  }
 }
 
 function applySample(
@@ -304,24 +339,24 @@ function applySample(
   if (routeProvider.length === 0 || routeModel.length === 0) state.unknownRouteSamples += 1
   const routeKey = `${routeProvider}\0${routeModel}`
   const peak = isPeakHour(time)
-  const cost = sampleCost(buckets, routeModel, time, state.resolver)
+  const costs = sampleCost(buckets, routeModel, time, state.resolver)
 
   const previous = state.lastAttempt
   if (previous !== undefined && previous.turn === turn && previous.step === step) {
     const previousRoute = state.routes.get(previous.routeKey)
     if (previousRoute !== undefined) {
-      subtractSampleFromRoute(previousRoute, previous.buckets, previous.costUsd, previous.peak)
+      subtractSampleFromRoute(previousRoute, previous.buckets, previous.costs, previous.peak)
       subtractBucket(state.totals, previous.buckets, true)
-      if (previous.costUsd !== undefined) {
-        state.totalCostUsd = (state.totalCostUsd ?? 0) - previous.costUsd
+      if (previous.costs !== undefined) {
+        state.totalCost = (state.totalCost ?? 0) - costsTotal(previous.costs)
       }
     }
     state.lastAttempt = undefined
   }
 
   const route = routeOf(state, routeProvider, routeModel)
-  addSampleToRoute(route, buckets, cost, peak)
+  addSampleToRoute(route, buckets, costs, peak)
   addBucket(state.totals, buckets, true)
-  if (cost !== undefined) state.totalCostUsd = (state.totalCostUsd ?? 0) + cost
-  state.lastAttempt = { turn, step, buckets, costUsd: cost, routeKey, peak }
+  if (costs !== undefined) state.totalCost = (state.totalCost ?? 0) + costsTotal(costs)
+  state.lastAttempt = { turn, step, buckets, costs, routeKey, peak }
 }

@@ -4,7 +4,8 @@
  * Registers the human `/usage` command. Invoking it derives exact
  * provider-reported token usage from the receiving agent's session log and
  * bills it with the official DeepSeek pricing (see `pricing.ts`), applying
- * peak/off-peak rates per request time.
+ * peak/off-peak rates per request time. Costs are reported in the configured
+ * currency (default 人民币/CNY).
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -14,6 +15,8 @@ import {
   createPriceResolver,
   PRICING_FETCHED_AT,
   PRICING_SOURCE_URL,
+  PRICING_SOURCE_URL_CNY,
+  type Currency,
   type ModelPrice,
   type ModelPriceOverrides,
 } from './pricing.ts'
@@ -26,20 +29,26 @@ export const inject = ['commands']
 /** Plugin configuration. */
 export interface UsageMeterConfig {
   /**
+   * Billing currency; selects the official price table and the report
+   * symbol. Default `cny` (人民币).
+   */
+  readonly currency?: Currency
+  /**
    * Apply DeepSeek peak/off-peak rates per request time (peak = 2× off-peak;
    * peak hours are 01:00–04:00 and 06:00–10:00 UTC, Mon–Fri). Default true.
    */
   readonly peakPricing?: boolean
   /**
-   * Per-model USD price overrides (per 1M tokens), merged over the official
-   * table. A model with no official price must override every bucket it
-   * should be billed for.
+   * Per-model price overrides (per 1M tokens, in the selected currency),
+   * merged over the official table. A model with no official price must
+   * override every bucket it should be billed for.
    */
   readonly priceOverrides?: ModelPriceOverrides
 }
 
 /** Validate plugin configuration (schema-driven defaults). */
 export const Config: Schema<UsageMeterConfig> = Schema.object({
+  currency: Schema.union(['cny', 'usd']).default('cny'),
   peakPricing: Schema.boolean().default(true),
   priceOverrides: Schema.dict(Schema.object({
     inputCacheMiss: Schema.number().min(0),
@@ -49,6 +58,7 @@ export const Config: Schema<UsageMeterConfig> = Schema.object({
 })
 
 const DEFAULT_CONFIG: Required<UsageMeterConfig> = {
+  currency: 'cny',
   peakPricing: true,
   priceOverrides: {},
 }
@@ -60,13 +70,24 @@ const DEFAULT_CONFIG: Required<UsageMeterConfig> = {
  */
 export function apply(ctx: Context, config: UsageMeterConfig = {}): void {
   const resolved: Required<UsageMeterConfig> = {
+    currency: config.currency ?? DEFAULT_CONFIG.currency,
     peakPricing: config.peakPricing ?? DEFAULT_CONFIG.peakPricing,
     priceOverrides: config.priceOverrides ?? DEFAULT_CONFIG.priceOverrides,
   }
   const resolver = createPriceResolver({
+    currency: resolved.currency,
     peakPricing: resolved.peakPricing,
     overrides: resolved.priceOverrides,
   })
+  const offPeakResolver = createPriceResolver({
+    currency: resolved.currency,
+    peakPricing: false,
+    overrides: resolved.priceOverrides,
+  })
+  const basePriceOf = (model: string): ModelPrice | undefined => offPeakResolver(model, 0)
+  const sourceNote = resolved.currency === 'cny'
+    ? `DeepSeek 官方人民币价格 — ${PRICING_SOURCE_URL_CNY} (${PRICING_FETCHED_AT} 抓取)`
+    : `DeepSeek official pricing — ${PRICING_SOURCE_URL} (fetched ${PRICING_FETCHED_AT})`
 
   ctx.effect(() => ctx.commands.register({
     name: 'usage',
@@ -77,12 +98,14 @@ export function apply(ctx: Context, config: UsageMeterConfig = {}): void {
       return {
         kind: 'success',
         text: formatUsageReport({ ...summary, sessionId: session.id }, {
-          sourceNote: `DeepSeek official pricing — ${PRICING_SOURCE_URL} (fetched ${PRICING_FETCHED_AT})`,
+          currency: resolved.currency,
+          sourceNote,
           peakPricing: resolved.peakPricing,
+          basePriceOf,
         }),
       }
     },
   }), 'dsh-usage-meter: command')
 }
 
-export type { ModelPrice, ModelPriceOverrides }
+export type { Currency, ModelPrice, ModelPriceOverrides }
