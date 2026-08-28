@@ -299,11 +299,9 @@ function applySample(
     state.skippedSamples += 1
     return
   }
-  const attributed = provider !== undefined && model !== undefined
-    && provider.length > 0 && model.length > 0
-  if (!attributed) state.unknownRouteSamples += 1
   const routeProvider = provider ?? state.latestContext?.provider ?? ''
   const routeModel = model ?? state.latestContext?.model ?? ''
+  if (routeProvider.length === 0 || routeModel.length === 0) state.unknownRouteSamples += 1
   const routeKey = `${routeProvider}\0${routeModel}`
   const peak = isPeakHour(time)
   const cost = sampleCost(buckets, routeModel, time, state.resolver)

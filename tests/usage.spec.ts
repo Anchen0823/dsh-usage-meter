@@ -73,6 +73,7 @@ describe('deriveSessionUsage', () => {
     expect(summary.totals.requests).toBe(2)
     expect(summary.routes).toHaveLength(1)
     expect(summary.routes[0]!).toMatchObject({ provider: '', model: '' })
+    expect(summary.unknownRouteSamples).toBe(2)
   })
 
   it('does not double-count a chunk sample replaced by the final message usage', () => {
@@ -106,6 +107,7 @@ describe('deriveSessionUsage', () => {
       .turnStart(1).usageChunk(1, 1, usage()).turnEnd(1)
       .events, flatResolver)
     expect(summary.routes[0]!).toMatchObject({ provider: 'deepseek', model: 'deepseek-v4-flash' })
+    expect(summary.unknownRouteSamples).toBe(0)
   })
 
   it('keeps different routes separate', () => {
