@@ -1,0 +1,5 @@
+# dsh-usage-meter bundle layer: registers the /usage command plugin.
+# Applied when a profile lists the bundle (see `dsh plugin add`).
+- insert:
+    - id: usage-meter
+      name: dsh-usage-meter

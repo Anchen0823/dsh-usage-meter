@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+lib/
+
+# Test / coverage
+coverage/
+*.tsbuildinfo
+
+# Local npm cache used during development (kept inside the repo workspace)
+.npm-cache/
+
+# Packaging
+*.tgz
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
