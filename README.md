@@ -1,6 +1,6 @@
 # dsh-usage-meter
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) plugin that reports **per-session token usage and DeepSeek API cost** for the current session, billed with the [official DeepSeek pricing](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/). Defaults to **人民币 (CNY)** billing, with USD available via configuration.
+A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) plugin that reports **per-session token usage and estimated DeepSeek API cost** for the current session, using a bundled snapshot of [DeepSeek pricing](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/). Defaults to **人民币 (CNY)** estimates, with USD available via configuration. Prices are not fetched automatically at runtime; see the snapshot date and overrides below.
 
 Run `/usage` in any session (Web GUI or CLI) and the plugin folds that session's durable event log — the exact provider-reported `usage` records — into a per-model breakdown of input (cache miss / cache hit), output, reasoning, and total tokens, then prices them using DeepSeek's official rates, applying **peak / off-peak** rates per request time.
 
@@ -25,6 +25,18 @@ Run `/usage` in any session (Web GUI or CLI) and the plugin folds that session's
 ```
 
 ## Install
+
+Requires Node.js `^22.19.0 || >=24.0.0`, matching `package.json`, and an existing DSH CLI/profile. This package is a plugin, not a standalone chat client.
+
+For a local checkout, prepare the package first:
+
+```sh
+git clone https://github.com/Anchen0823/dsh-usage-meter.git
+cd dsh-usage-meter
+npm ci
+npm run build
+cd ..
+```
 
 The plugin ships as a [DSH bundle](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md). With the `dsh` CLI installed, from any profile:
 
@@ -87,7 +99,7 @@ Configure via the bundle row in your `cordis.patch.yml` (or `dsh.config`):
 ## Development
 
 ```sh
-npm install        # node >= 22; installs dev toolchain
+npm ci             # Node ^22.19.0 || >=24.0.0; install from lockfile
 npm test           # vitest
 npm run typecheck  # tsc --noEmit
 npm run build      # tsdown -> lib/index.js
@@ -96,6 +108,17 @@ npm run build      # tsdown -> lib/index.js
 The build is a plain ESM transpile (unbundled `@deepseek-ai/*`, `schemastery`) with no type-checking or declaration emit, so it also runs as the `prepare` hook for git-based installs.
 
 `scripts/report-session.mjs` is a diagnostic: it decodes a persisted `session.jsonl.zstd` log and runs the `/usage` fold over the real events without touching the running deployment.
+
+### Source map
+
+| Path | Purpose |
+| --- | --- |
+| [src/index.ts](src/index.ts) | Plugin registration and `/usage` command |
+| [src/usage.ts](src/usage.ts) | Fold session events into usage totals |
+| [src/pricing.ts](src/pricing.ts) | Bundled price tables and cost calculation |
+| [src/report.ts](src/report.ts) | Format the usage report |
+| [tests](tests/) | Usage, pricing, and report tests |
+| [cordis.patch.yml](cordis.patch.yml) | DSH bundle configuration |
 
 ## Known limitations
 
